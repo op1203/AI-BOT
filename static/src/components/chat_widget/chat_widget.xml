@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<templates>
+    <t t-name="inventory_ai.ChatWidget" owl="1">
+        <div class="o_inventory_ai_systray_item">
+            <!-- Navbar Item -->
+            <div class="o_systray_ai_button" t-on-click="openAIChat" title="Inventory AI">
+                <span class="o_ai_text">AI</span>
+                <i class="fa fa-commenting-o ms-1"/>
+            </div>
+        </div>
+    </t>
+</templates>

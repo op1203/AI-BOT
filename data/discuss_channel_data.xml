@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="channel_inventory_ai" model="discuss.channel">
+            <field name="name">AI Inventory Assistant</field>
+            <field name="channel_type">channel</field>
+            <field name="description">Ask questions about products and stock levels.</field>
+            <field name="group_public_id" ref="base.group_user"/>
+        </record>
+    </data>
+</odoo>

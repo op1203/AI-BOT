@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.inventory_ai</field>
+        <field name="model">res.config.settings</field>
+        <field name="priority" eval="10"/>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app data-string="Inventory AI" string="Inventory AI" name="inventory_ai">
+                    <block title="Gemini Configuration" name="gemini_config">
+                        <setting string="Gemini API Key" help="Provide your Google Gemini API Key">
+                            <field name="gemini_api_key" password="True"/>
+                        </setting>
+                    </block>
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_inventory_ai_config" model="ir.actions.act_window">
+        <field name="name">Settings</field>
+        <field name="type">ir.actions.act_window</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'inventory_ai'}</field>
+    </record>
+
+    <menuitem id="menu_inventory_ai_config" name="Settings" parent="menu_inventory_ai_root" action="action_inventory_ai_config" sequence="100"/>
+</odoo>
