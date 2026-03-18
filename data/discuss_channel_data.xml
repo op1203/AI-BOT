@@ -1,6 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data>
+    <data noupdate="1">
+        <!-- AI Bot Partner -->
+        <record id="partner_inventory_ai_bot" model="res.partner">
+            <field name="name">Inventory AI Assistant</field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="active" eval="True"/>
+            <field name="image_1920" type="base64" file="inventory_ai/static/description/icon.png"/>
+        </record>
+
+        <!-- AI Bot User -->
+        <record id="user_inventory_ai_bot" model="res.users">
+            <field name="partner_id" ref="partner_inventory_ai_bot"/>
+            <field name="login">inventory_ai_bot</field>
+            <field name="password">inventory_ai_bot</field>
+            <field name="groups_id" eval="[(4, ref('base.group_user'))]"/>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="company_ids" eval="[(4, ref('base.main_company'))]"/>
+        </record>
+
         <record id="channel_inventory_ai" model="discuss.channel">
             <field name="name">AI Inventory Assistant</field>
             <field name="channel_type">channel</field>

@@ -12,6 +12,17 @@
                         <setting string="Gemini API Key" help="Provide your Google Gemini API Key">
                             <field name="gemini_api_key" password="True"/>
                         </setting>
+                        <setting string="Gemini Model" help="E.g. gemini-1.5-flash">
+                            <field name="gemini_model_name"/>
+                        </setting>
+                        <setting string="Test API" help="Verify your API Key and see available models">
+                            <button name="action_test_gemini_api" type="object" string="Test Connectivity" class="oe_link"/>
+                        </setting>
+                    </block>
+                    <block title="AI Data Indexing" name="ai_data_indexing">
+                        <setting string="Index Products" help="Vectorize all products for semantic search analysis">
+                            <button name="action_index_all_products_from_settings" type="object" string="Index All Products" class="oe_highlight"/>
+                        </setting>
                     </block>
                 </app>
             </xpath>

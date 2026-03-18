@@ -5,7 +5,7 @@
     "summary": "AI Bot for inventory and operations",
     "description": "Custom AI bot module for Odoo Community 18",
     "author": "Your Name",
-    "depends": ["base", "stock", "mail"],
+    "depends": ["base", "stock", "mail", "sale"],
     "data": [
         "security/ir.model.access.csv",
         "data/discuss_channel_data.xml",

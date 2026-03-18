@@ -1,2 +1,3 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_inventory_ai_bot,inventory.ai.bot,model_inventory_ai_bot,base.group_user,1,1,1,1
+access_product_product_embedding,product.product.embedding,model_product_product_embedding,base.group_user,1,1,1,1
