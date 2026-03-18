@@ -9,6 +9,7 @@
     "data": [
         "security/ir.model.access.csv",
         "data/discuss_channel_data.xml",
+        "data/ir_cron_data.xml",
         "views/inventory_ai_views.xml",
         "views/res_config_settings_views.xml",
     ],

@@ -104,6 +104,47 @@ class DiscussChannel(models.Model):
         context += "```\n"
         return context
 
+    def _get_conversation_history(self, limit_days=30):
+        """Fetches the last 30 days of messages for the current channel as context."""
+        from datetime import datetime, timedelta
+        date_limit = datetime.now() - timedelta(days=limit_days)
+        
+        # Search for messages in this channel older than date_limit
+        messages = self.env['mail.message'].search([
+            ('res_id', '=', self.id),
+            ('model', '=', 'discuss.channel'),
+            ('message_type', '=', 'comment'),
+            ('create_date', '>=', fields.Datetime.to_string(date_limit))
+        ], order='create_date asc', limit=50) # Limit to 50 messages to avoid token bloat
+        
+        history = ""
+        for msg in messages:
+            author = msg.author_id.name or "User"
+            history += f"{author}: {msg.body}\n"
+        
+        if not history:
+            return "No previous history for this period.\n"
+        return history
+
+    @api.model
+    def cron_cleanup_old_messages(self):
+        """Cron job to delete messages older than 30 days in the AI channel."""
+        from datetime import datetime, timedelta
+        ai_channel = self.env.ref('inventory_ai.channel_inventory_ai', raise_if_not_found=False)
+        if not ai_channel:
+            return
+            
+        date_limit = datetime.now() - timedelta(days=30)
+        old_messages = self.env['mail.message'].search([
+            ('res_id', '=', ai_channel.id),
+            ('model', '=', 'discuss.channel'),
+            ('create_date', '<', fields.Datetime.to_string(date_limit))
+        ])
+        
+        if old_messages:
+            old_messages.unlink()
+        return True
+
     def _get_ai_response_and_post(self, message):
         """
         Calculates AI response using Gemini API and posts it back to the channel.
@@ -116,38 +157,46 @@ class DiscussChannel(models.Model):
             prompt = message.body
             clean_prompt = re.sub('<[^<]+?>', '', prompt).strip()
 
-            # "Business Consultant" System Prompt
+            # "Business Consultant" System Prompt with Memory Instructions
             system_prompt = (
                 "You are the Odoo Business Consultant. "
-                "Your goal is to provide insightful, human-like advice to the user. "
-                "Don't just list data; analyze it. Specifically:\n"
-                "1. If a product is a 'Best Seller' but has 'Low Stock' (less than average monthly sales), warn the user to restock.\n"
-                "2. If a product has 'High Stock' but 'Low Sales', suggest a promotion or reducing future orders.\n"
-                "3. Speak naturally, as a professional colleague. Avoid technical jargon or saying 'the provided context'.\n"
-                "4. Be authoritative and confident in your recommendations.\n\n"
-                "NEVER include technical data like 'RAG Source' or 'SQL Query' in your output."
+                "Your goal is to provide insightful, human-like advice. "
+                "You have access to the last 30 days of conversation history to maintain continuity. "
+                "Each new day is treated as a fresh session, but you should remember previous context if relevant.\n\n"
+                "GUIDELINES:\n"
+                "1. Analyze Best/Least Sellers and warn about Stock vs Sales.\n"
+                "2. Speak naturally like a colleague. No jargon.\n"
+                "3. If the user refers to a previous topic from the history, acknowledge it."
             )
 
-            # Step 1: Operational & BI Context
-            context = self._get_operational_context() + "\n"
+            # Context Layers
+            bi_context = self._get_operational_context()
+            history_context = "\n--- CONVERSATION HISTORY (LAST 30 DAYS) ---\n" + self._get_conversation_history()
             
             # Step 2: Product Context (Vector Search)
             embedding_model = self.env['product.product.embedding']
             similar_products = embedding_model.search_similar_products(clean_prompt)
+            product_context = ""
             if similar_products:
-                context += "```text\n--- SPECIFIC PRODUCT DETAILS ---\n"
+                product_context = "```text\n--- SPECIFIC PRODUCT DETAILS ---\n"
                 for product in similar_products:
                     qty = product.with_context(location=False).qty_available
-                    context += f"- {product.name}: {qty} {product.uom_id.name} in stock.\n"
-                context += "```\n"
+                    product_context += f"- {product.name}: {qty} {product.uom_id.name} in stock.\n"
+                product_context += "```\n"
             
-            full_prompt = f"{system_prompt}\n\n{context}\n\nUser Question: {clean_prompt}"
+            full_prompt = (
+                f"{system_prompt}\n\n"
+                f"{bi_context}\n\n"
+                f"{history_context}\n\n"
+                f"{product_context}\n"
+                f"User Question: {clean_prompt}"
+            )
             
             response_text = self._call_gemini_api(full_prompt)
 
         except Exception as e:
             _logger.error("Inventory AI Error: %s", str(e))
-            response_text = "I'm sorry, I encountered a slight internal hiccup while analyzing your data. Please try again or re-index your products."
+            response_text = "I'm sorry, I encountered a slight internal hiccup while analyzing your data. Please try again."
 
         # Post the message back to the channel
         bot_partner = self.env.ref('inventory_ai.partner_inventory_ai_bot', raise_if_not_found=False)
