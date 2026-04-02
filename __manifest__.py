@@ -15,6 +15,8 @@
     ],
     "assets": {
         "web.assets_backend": [
+            "inventory_ai/static/src/css/ai_style.css",
+            "inventory_ai/static/src/js/ai_typing.js",
             "inventory_ai/static/src/components/chat_widget/chat_widget.scss",
             "inventory_ai/static/src/components/chat_widget/chat_widget.js",
             "inventory_ai/static/src/components/chat_widget/chat_widget.xml",
