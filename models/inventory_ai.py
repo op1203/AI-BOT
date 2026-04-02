@@ -138,48 +138,32 @@ class DiscussChannel(models.Model):
         ], order='create_date asc', limit=30)
         return "\n".join([f"{m.author_id.name}: {m.body}" for m in messages])
 
-    # --- AI ANALYTICAL TOOLS (FOR FUNCTION CALLING) ---
-
-    def _ai_tool_get_revenue_data(self, days=30):
-        """Fetches revenue for a specific number of days."""
+    @api.model
+    def cron_cleanup_old_messages(self):
+        """Cleanup old messages."""
         from datetime import datetime, timedelta
-        start_date = fields.Datetime.to_string(datetime.now() - timedelta(days=int(days)))
+        ai_channel = self.env.ref('inventory_ai.channel_inventory_ai', raise_if_not_found=False)
+        if not ai_channel: return True
+        date_limit = datetime.now() - timedelta(days=30)
+        self.env['mail.message'].search([
+            ('res_id', '=', ai_channel.id),
+            ('model', '=', 'discuss.channel'),
+            ('create_date', '<', fields.Datetime.to_string(date_limit))
+        ]).unlink()
+        return True
+
+    def _get_revenue_for_days(self, days):
+        """Helper to get revenue for exactly X days."""
+        from datetime import datetime, timedelta
+        date_limit = fields.Datetime.to_string(datetime.now() - timedelta(days=days))
         orders = self.env['sale.order'].search([
             ('state', 'in', ['sale', 'done']),
-            ('date_order', '>=', start_date)
+            ('date_order', '>=', date_limit)
         ])
-        rev = sum(orders.mapped('amount_total'))
-        return {"days": days, "revenue": rev, "order_count": len(orders)}
-
-    def _ai_tool_get_top_products(self, days=30, limit=5):
-        """Fetches top products for a specific timeframe."""
-        from datetime import datetime, timedelta
-        date_limit = fields.Datetime.to_string(datetime.now() - timedelta(days=int(days)))
-        self.env.cr.execute("""
-            SELECT product_id, sum(product_uom_qty) as total_qty, sum(price_subtotal) as total_revenue
-            FROM sale_order_line
-            WHERE state IN ('sale', 'done') AND create_date >= %s
-            GROUP BY product_id
-            ORDER BY total_qty DESC
-            LIMIT %s
-        """, (date_limit, int(limit)))
-        results = []
-        for p_id, q, rev in self.env.cr.fetchall():
-            p = self.env['product.product'].browse(p_id)
-            results.append({"name": p.name, "qty": q, "revenue": rev, "stock": p.qty_available})
-        return results
-
-    def _ai_tool_get_stock_status(self, product_query):
-        """Finds detailed stock for a product."""
-        embedding_model = self.env['product.product.embedding']
-        products = embedding_model.search_similar_products(product_query)
-        results = []
-        for p in products[:3]:
-            results.append({"name": p.name, "stock": p.qty_available, "price": p.list_price, "cost": p.standard_price})
-        return results
+        return sum(orders.mapped('amount_total')), len(orders)
 
     def _get_ai_response_and_post(self, message):
-        """AI Response logic with Tool Calling."""
+        """AI Response logic."""
         import re
         import logging
         _logger = logging.getLogger(__name__)
@@ -188,63 +172,50 @@ class DiscussChannel(models.Model):
             prompt = message.body
             clean_prompt = re.sub('<[^<]+?>', '', prompt).strip()
 
-            # The Agentic Prompt
+            # The Ultimate Selective HTML Prompt
             system_prompt = (
                 "You are the Gemini Strategic Analyst for Odoo. "
-                "You have access to REAL-TIME TOOLS to query the database. "
-                "If a user asks for revenue, stock, or customers for ANY timeframe (e.g. 7 days, 45 days), "
-                "use the provided tools to get the data first.\n\n"
-                "STYLE RULES:\n"
-                "1. **SELECTIVE HTML**: Return only relevant sections in HTML (<h3>, <ul>, <li>, <strong>).\n"
-                "2. **ACCURACY**: Use the exact numbers returned by the tools.\n"
-                "3. **PROFESSIONAL**: No long paragraphs. Use clear headers and emojis."
+                "CRITICAL: Answer ONLY the specific question asked. Do not dump irrelevant data.\n\n"
+                "RULES:\n"
+                "1. **OUTPUT**: Use PURE HTML only (<h3>, <ul>, <li>, <strong>, <br/>). NO Markdown.\n"
+                "2. **SELECTIVITY**: Only show sections that answer the question.\n"
+                "3. **VISUALS**: Use <h3> with emojis. Use <br/><br/> for spacing.\n"
+                "4. **PRECISION**: Use the provided [RAW DATA] and [DYNAMIC DATA] for numbers.\n"
             )
 
-            # Define tools for Gemini
-            tools = [{
-                "function_declarations": [
-                    {
-                        "name": "get_revenue_data",
-                        "description": "Get total revenue and order count for the last N days.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "days": {"type": "NUMBER", "description": "Number of days (e.g. 7, 30, 90)"}
-                            },
-                            "required": ["days"]
-                        }
-                    },
-                    {
-                        "name": "get_top_products",
-                        "description": "Get the best-selling products for the last N days.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "days": {"type": "NUMBER", "description": "Number of days"},
-                                "limit": {"type": "NUMBER", "description": "Max results (default 5)"}
-                            },
-                            "required": ["days"]
-                        }
-                    },
-                    {
-                        "name": "get_stock_status",
-                        "description": "Get current stock levels for a specific product name or category.",
-                        "parameters": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "product_query": {"type": "STRING", "description": "Product name or search term"}
-                            },
-                            "required": ["product_query"]
-                        }
-                    }
-                ]
-            }]
-
-            response_text = self._call_gemini_with_tools(clean_prompt, system_prompt, tools)
+            data_context = self._get_operational_context()
+            
+            # DYNAMIC DATA INJECTION (Last X Days Revenue)
+            dynamic_context = "[DYNAMIC DATA]\n"
+            day_match = re.search(r'last (\d+) days', clean_prompt.lower())
+            if day_match:
+                days = int(day_match.group(1))
+                rev, count = self._get_revenue_for_days(days)
+                dynamic_context += f"REVENUE_LAST_{days}_DAYS: Amount={rev}, Orders={count}\n"
+            
+            history_context = "[HISTORY]\n" + self._get_conversation_history()
+            
+            # Additional Product Search
+            embedding_model = self.env['product.product.embedding']
+            sim_products = embedding_model.search_similar_products(clean_prompt)
+            search_context = "[SEARCH_RESULTS]\n"
+            if sim_products:
+                for p in sim_products[:5]:
+                    search_context += f"PRODUCT: Name='{p.name}', Price={p.list_price}, Stock={p.qty_available}\n"
+            
+            full_prompt = (
+                f"{system_prompt}\n\n"
+                f"{data_context}\n\n"
+                f"{dynamic_context}\n\n"
+                f"{history_context}\n\n"
+                f"{search_context}\n\n"
+                f"User Question: {clean_prompt}"
+            )
+            response_text = self._call_gemini_api(full_prompt)
 
         except Exception as e:
             _logger.error("AI Error: %s", str(e))
-            response_text = "I encountered an error while processing your request. Please try again."
+            response_text = "I encountered an error. Please try again."
 
         from markupsafe import Markup
         bot_partner = self.env.ref('inventory_ai.partner_inventory_ai_bot', raise_if_not_found=False)
@@ -255,60 +226,40 @@ class DiscussChannel(models.Model):
             subtype_xmlid='mail.mt_comment'
         )
 
-    def _call_gemini_with_tools(self, user_prompt, system_prompt, tools):
-        """Advanced helper to handle tool calling loops."""
+
+    def _call_gemini_api(self, prompt):
+        """
+        Helper to call Google Gemini API with detailed error reporting.
+        """
         import requests
         import json
 
         api_key = self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_api_key')
-        model = (self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_model_name') or 'gemini-1.5-flash').strip()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        model_name = (self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_model_name') or 'gemini-2.0-flash').strip()
         
-        messages = [
-            {"role": "user", "parts": [{"text": f"{system_prompt}\n\nUser Question: {user_prompt}"}]}
-        ]
+        # Clean model name
+        model_name = model_name.replace('models/', '').strip('`"\' ')
 
-        # 1. First Call: See if tools are needed
-        payload = {"contents": messages, "tools": tools}
-        res = requests.post(url, json=payload, timeout=30).json()
-        
-        # Handle Tool Calls
-        candidate = res.get('candidates', [{}])[0]
-        content = candidate.get('content', {})
-        parts = content.get('parts', [])
-        
-        if parts and 'functionCall' in parts[0]:
-            tool_call = parts[0]['functionCall']
-            fn_name = tool_call['name']
-            args = tool_call.get('args', {})
-            
-            # Execute Tool
-            result = {}
-            if fn_name == "get_revenue_data":
-                result = self._ai_tool_get_revenue_data(**args)
-            elif fn_name == "get_top_products":
-                result = self._ai_tool_get_top_products(**args)
-            elif fn_name == "get_stock_status":
-                result = self._ai_tool_get_stock_status(**args)
-            
-            # Second Call: Feed result back
-            messages.append(content) # Response from model with functionCall
-            messages.append({
-                "role": "function",
-                "parts": [{
-                    "functionResponse": {
-                        "name": fn_name,
-                        "response": {"content": result}
-                    }
-                }]
-            })
-            
-            final_res = requests.post(url, json={"contents": messages, "tools": tools}, timeout=30).json()
-            final_candidate = final_res.get('candidates', [{}])[0]
-            return final_candidate.get('content', {}).get('parts', [{}])[0].get('text', 'No answer generated.')
-        
-        return parts[0].get('text', 'No answer generated.')
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        headers = {'Content-Type': 'application/json'}
+        data = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
 
-    def _call_gemini_api(self, prompt):
-        # Legacy fallback - usually not called now
-        return ""
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=15)
+            if response.status_code == 429:
+                return "The AI service is currently busy handling many requests. Please wait about a minute before trying again."
+            
+            if response.status_code != 200:
+                return "I'm having a little trouble connecting to my central brain right now. Please try again in a few moments."
+            
+            result = response.json()
+            candidates = result.get('candidates', [])
+            if candidates:
+                return candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            return "I'm sorry, I couldn't summarize that right now. Could you please try again?"
+        except Exception as e:
+            return "There seems to be a connection issue between Odoo and the AI service. Please check your network or API key."
