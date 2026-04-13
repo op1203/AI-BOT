@@ -1,4 +1,5 @@
 from odoo import models, fields
+import requests
 
 class ResConfigSettings(models.TransientModel):
     _inherit = 'res.config.settings'
@@ -16,7 +17,6 @@ class ResConfigSettings(models.TransientModel):
     )
     def action_test_gemini_api(self):
         """Test the Gemini API connection and list available models."""
-        import requests
         api_key = self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_api_key')
         if not api_key:
             return {
