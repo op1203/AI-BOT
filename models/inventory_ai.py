@@ -74,7 +74,7 @@ class DiscussChannel(models.Model):
             _logger.error("Error calculating stats context: %s", str(e))
 
         # 2. Revenue (Current Month vs Last Month)
-        if 'sale.order' in self.env:
+        if 'sale.order' in self.env or 'pos.order' in self.env:
             try:
                 with self.env.cr.savepoint():
                     today = datetime.now()
@@ -82,34 +82,69 @@ class DiscussChannel(models.Model):
                     last_month_end = start_current - timedelta(days=1)
                     start_last_month = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     
-                    def get_revenue(start, end):
-                        orders = self.env['sale.order'].search([
-                            ('state', 'in', ['sale', 'done']),
-                            ('date_order', '>=', fields.Datetime.to_string(start)),
-                            ('date_order', '<=', fields.Datetime.to_string(end))
-                        ])
-                        return sum(orders.mapped('amount_total')), len(orders)
+                    def get_revenue_breakdown(start, end):
+                        s_total, s_count = 0.0, 0
+                        p_total, p_count = 0.0, 0
+                        if 'sale.order' in self.env:
+                            s_orders = self.env['sale.order'].search([
+                                ('state', 'in', ['sale', 'done']),
+                                ('date_order', '>=', fields.Datetime.to_string(start)),
+                                ('date_order', '<=', fields.Datetime.to_string(end))
+                            ])
+                            s_total = sum(s_orders.mapped('amount_total'))
+                            s_count = len(s_orders)
+                        
+                        if 'pos.order' in self.env:
+                            p_orders = self.env['pos.order'].search([
+                                ('state', 'in', ['paid', 'done', 'invoiced']),
+                                ('date_order', '>=', fields.Datetime.to_string(start)),
+                                ('date_order', '<=', fields.Datetime.to_string(end))
+                            ])
+                            p_total = sum(p_orders.mapped('amount_total'))
+                            p_count = len(p_orders)
+                        return s_total, s_count, p_total, p_count
 
-                    rev_current, count_current = get_revenue(start_current, today)
-                    rev_last, count_last = get_revenue(start_last_month, last_month_end)
-                    data += f"REVENUE: LastMonth={rev_last}({count_last} orders), CurrentMonth={rev_current}({count_current} orders)\n"
+                    s_rev_c, s_cnt_c, p_rev_c, p_cnt_c = get_revenue_breakdown(start_current, today)
+                    s_rev_l, s_cnt_l, p_rev_l, p_cnt_l = get_revenue_breakdown(start_last_month, last_month_end)
+                    
+                    data += f"REVENUE_CURRENT_MONTH: Sales={s_rev_c}({s_cnt_c} orders), PoS={p_rev_c}({p_cnt_c} orders)\n"
+                    data += f"REVENUE_LAST_MONTH: Sales={s_rev_l}({s_cnt_l} orders), PoS={p_rev_l}({p_cnt_l} orders)\n"
+                    
+                    if 'pos.order' in self.env and 'table_id' in self.env['pos.order']._fields:
+                        rest_cnt = self.env['pos.order'].search_count([
+                            ('state', 'in', ['paid', 'done', 'invoiced']),
+                            ('date_order', '>=', fields.Datetime.to_string(start_current)),
+                            ('table_id', '!=', False)
+                        ])
+                        data += f"RESTAURANT_ORDERS_THIS_MONTH: {rest_cnt}\n"
             except Exception as e:
                 _logger.error("Error calculating revenue context: %s", str(e))
 
         # 3. Best Sellers (Last 30 days)
-        if 'sale.order.line' in self.env:
+        if 'sale.order.line' in self.env or 'pos.order.line' in self.env:
             try:
                 with self.env.cr.savepoint():
                     date_30_days_ago = fields.Datetime.to_string(datetime.now() - timedelta(days=30))
-                    self.env.cr.execute("""
-                        SELECT l.product_id, sum(l.product_uom_qty) as total_qty, sum(l.price_subtotal) as total_revenue
-                        FROM sale_order_line l
-                        JOIN sale_order s ON l.order_id = s.id
-                        WHERE s.state IN ('sale', 'done') AND l.create_date >= %s
-                        GROUP BY l.product_id
+                    
+                    # Unified SQL for Sales and PoS best sellers
+                    query = """
+                        SELECT product_id, sum(qty) as total_qty, sum(price) as total_revenue
+                        FROM (
+                            SELECT l.product_id, l.product_uom_qty as qty, l.price_subtotal as price
+                            FROM sale_order_line l
+                            JOIN sale_order s ON l.order_id = s.id
+                            WHERE s.state IN ('sale', 'done') AND s.date_order >= %s
+                            UNION ALL
+                            SELECT l.product_id, l.qty as qty, l.price_subtotal as price
+                            FROM pos_order_line l
+                            JOIN pos_order p ON l.order_id = p.id
+                            WHERE p.state IN ('paid', 'done', 'invoiced') AND p.date_order >= %s
+                        ) as combined_sales
+                        GROUP BY product_id
                         ORDER BY total_qty DESC
                         LIMIT 5
-                    """, (date_30_days_ago,))
+                    """
+                    self.env.cr.execute(query, (date_30_days_ago, date_30_days_ago))
                     
                     for p_id, q, rev in self.env.cr.fetchall():
                         p = self.env['product.product'].browse(p_id)
@@ -127,23 +162,85 @@ class DiscussChannel(models.Model):
             _logger.error("Error calculating zero stock context: %s", str(e))
 
         # 5. Top Customers (Last 30 days)
-        if 'sale.order' in self.env:
+        if 'sale.order' in self.env or 'pos.order' in self.env:
             try:
                 with self.env.cr.savepoint():
                     date_30_days_ago = fields.Datetime.to_string(datetime.now() - timedelta(days=30))
-                    self.env.cr.execute("""
+                    
+                    query = """
                         SELECT partner_id, sum(amount_total) as total_rev
-                        FROM sale_order
-                        WHERE state IN ('sale', 'done') AND date_order >= %s
+                        FROM (
+                            SELECT partner_id, amount_total
+                            FROM sale_order
+                            WHERE state IN ('sale', 'done') AND date_order >= %s
+                            UNION ALL
+                            SELECT partner_id, amount_total
+                            FROM pos_order
+                            WHERE state IN ('paid', 'done', 'invoiced') AND date_order >= %s
+                        ) as combined_orders
+                        WHERE partner_id IS NOT NULL
                         GROUP BY partner_id
                         ORDER BY total_rev DESC
                         LIMIT 5
-                    """, (date_30_days_ago,))
+                    """
+                    self.env.cr.execute(query, (date_30_days_ago, date_30_days_ago))
                     for partner_id, rev in self.env.cr.fetchall():
                         partner = self.env['res.partner'].browse(partner_id)
                         data += f"TOP_CUSTOMER: Name='{partner.name}', TotalRevenue={rev}\n"
             except Exception as e:
                 _logger.error("Error calculating top customers context: %s", str(e))
+        
+        # 6. CRM (Leads/Opportunities)
+        if 'crm.lead' in self.env:
+            try:
+                leads_count = self.env['crm.lead'].search_count([('type', '=', 'lead'), ('active', '=', True)])
+                ops = self.env['crm.lead'].search([('type', '=', 'opportunity'), ('probability', '<', 100), ('probability', '>', 0)])
+                pipeline_val = sum(ops.mapped('expected_revenue'))
+                data += f"CRM: Leads={leads_count}, ActiveOpportunities={len(ops)}, PipelineValue={pipeline_val}\n"
+            except Exception as e:
+                _logger.error("Error calculating CRM context: %s", str(e))
+
+        # 7. Invoicing (Outstanding)
+        if 'account.move' in self.env:
+            try:
+                invoices = self.env['account.move'].search([
+                    ('move_type', '=', 'out_invoice'),
+                    ('state', '=', 'posted'),
+                    ('payment_state', 'not in', ['paid', 'reversed'])
+                ])
+                total_due = sum(invoices.mapped('amount_residual'))
+                data += f"INVOICING: OutstandingInvoices={len(invoices)}, TotalDue={total_due}\n"
+            except Exception as e:
+                _logger.error("Error calculating Invoicing context: %s", str(e))
+
+        # 8. Purchase (Pending POs)
+        if 'purchase.order' in self.env:
+            try:
+                pos = self.env['purchase.order'].search([('state', 'in', ['purchase', 'done'])])
+                data += f"PURCHASE: TotalActivePOs={len(pos)}, TotalPurchaseVal={sum(pos.mapped('amount_total'))}\n"
+            except Exception as e:
+                _logger.error("Error calculating Purchase context: %s", str(e))
+
+        # 9. Manufacturing (MOs)
+        if 'mrp.production' in self.env:
+            try:
+                mos_count = self.env['mrp.production'].search_count([('state', 'not in', ['done', 'cancel'])])
+                data += f"MANUFACTURING: ActiveMOs={mos_count}\n"
+            except Exception as e:
+                _logger.error("Error calculating Manufacturing context: %s", str(e))
+
+        # 10. Calendar (Today's Meetings)
+        if 'calendar.event' in self.env:
+            try:
+                today_start = datetime.now().replace(hour=0, minute=0, second=0)
+                today_end = today_start + timedelta(days=1)
+                meetings = self.env['calendar.event'].search_count([
+                    ('start', '>=', fields.Datetime.to_string(today_start)),
+                    ('start', '<', fields.Datetime.to_string(today_end))
+                ])
+                data += f"CALENDAR: MeetingsToday={meetings}\n"
+            except Exception as e:
+                _logger.error("Error calculating Calendar context: %s", str(e))
 
         return data
 
@@ -167,11 +264,26 @@ class DiscussChannel(models.Model):
         """Helper to get revenue for exactly X days."""
         from datetime import datetime, timedelta
         date_limit = fields.Datetime.to_string(datetime.now() - timedelta(days=days))
-        orders = self.env['sale.order'].search([
-            ('state', 'in', ['sale', 'done']),
-            ('date_order', '>=', date_limit)
-        ])
-        return sum(orders.mapped('amount_total')), len(orders)
+        total = 0.0
+        count = 0
+        
+        if 'sale.order' in self.env:
+            s_orders = self.env['sale.order'].search([
+                ('state', 'in', ['sale', 'done']),
+                ('date_order', '>=', date_limit)
+            ])
+            total += sum(s_orders.mapped('amount_total'))
+            count += len(s_orders)
+            
+        if 'pos.order' in self.env:
+            p_orders = self.env['pos.order'].search([
+                ('state', 'in', ['paid', 'done', 'invoiced']),
+                ('date_order', '>=', date_limit)
+            ])
+            total += sum(p_orders.mapped('amount_total'))
+            count += len(p_orders)
+            
+        return total, count
 
     def _get_ai_response_and_post(self, message):
         """AI Response logic."""
@@ -184,7 +296,8 @@ class DiscussChannel(models.Model):
             # The Ultimate Selective HTML Prompt
             system_prompt = (
                 "You are the Gemini Strategic Analyst for Odoo. "
-                "CRITICAL: Answer ONLY the specific question asked. Do not dump irrelevant data.\n\n"
+                "CRITICAL: Answer ONLY the specific question asked. Do not dump irrelevant data.\n"
+                "You have access to: Sales, Point of Sale, Inventory, CRM, Invoicing, Purchase, Manufacturing, and Calendar.\n\n"
                 "RULES:\n"
                 "1. **OUTPUT**: Use PURE HTML only (<h3>, <ul>, <li>, <strong>, <br/>). NO Markdown.\n"
                 "2. **SELECTIVITY**: Only show sections that answer the question.\n"
@@ -260,7 +373,7 @@ class DiscussChannel(models.Model):
                 return "AI configuration error: Missing API Key. Please configure it in Settings."
 
             _logger.info("Calling Gemini API: %s", url.split('?')[0])
-            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=15)
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=30)
             
             if response.status_code == 429:
                 _logger.warning("Gemini API Rate Limit: %s", response.text)
