@@ -1,10 +1,5 @@
 from odoo import models, fields, api, _
-from odoo.tools import Markup
-from datetime import datetime, timedelta
 import logging
-import requests
-import json
-import re
 
 _logger = logging.getLogger(__name__)
 
@@ -64,6 +59,8 @@ class DiscussChannel(models.Model):
 
     def _get_operational_context(self):
         """Returns raw data structure for the AI to interpret. No formatting here."""
+        from datetime import datetime, timedelta
+        from odoo import fields
         
         data = "[RAW DATA FOR ANALYSIS]\n"
         
@@ -260,6 +257,7 @@ class DiscussChannel(models.Model):
     @api.model
     def cron_cleanup_old_messages(self):
         """Cleanup old messages."""
+        from datetime import datetime, timedelta
         ai_channel = self.env.ref('inventory_ai.channel_inventory_ai', raise_if_not_found=False)
         if not ai_channel: return True
         date_limit = datetime.now() - timedelta(days=30)
@@ -272,6 +270,7 @@ class DiscussChannel(models.Model):
 
     def _get_revenue_for_days(self, days):
         """Helper to get revenue for exactly X days."""
+        from datetime import datetime, timedelta
         date_limit = fields.Datetime.to_string(datetime.now() - timedelta(days=days))
         total = 0.0
         count = 0
@@ -296,6 +295,7 @@ class DiscussChannel(models.Model):
 
     def _get_ai_response_and_post(self, message):
         """AI Response logic."""
+        import re
 
         try:
             prompt = message.body
@@ -344,6 +344,7 @@ class DiscussChannel(models.Model):
             _logger.error("AI Error: %s", str(e))
             response_text = "I encountered an error. Please try again."
 
+        from markupsafe import Markup
         bot_partner = self.env.ref('inventory_ai.partner_inventory_ai_bot', raise_if_not_found=False)
         self.with_context(mail_create_nosubscribe=True).message_post(
             body=Markup(response_text),
@@ -357,6 +358,9 @@ class DiscussChannel(models.Model):
         """
         Helper to call Google Gemini API with detailed error reporting.
         """
+        import requests
+        import json
+
         api_key = self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_api_key')
         model_name = (self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_model_name') or 'gemini-2.0-flash').strip()
         

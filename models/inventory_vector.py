@@ -1,7 +1,4 @@
 from odoo import models, fields, api, _
-import requests
-import json
-import math
 
 class ProductProductEmbedding(models.Model):
     _name = 'product.product.embedding'
@@ -31,6 +28,8 @@ class ProductProductEmbedding(models.Model):
 
     def _get_embedding(self, text):
         """Generate embedding using Gemini embedding model."""
+        import requests
+        import json
         
         api_key = self.env['ir.config_parameter'].sudo().get_param('inventory_ai.gemini_api_key')
         if not api_key:
@@ -56,6 +55,7 @@ class ProductProductEmbedding(models.Model):
     @api.model
     def action_index_all_products(self):
         """Index all products by generating embeddings."""
+        import json
         self._create_vector_extension()
         products = self.env['product.product'].search([('active', '=', True)])
         for product in products:
@@ -74,6 +74,8 @@ class ProductProductEmbedding(models.Model):
 
     def _search_similar_python(self, query_vector, limit=5):
         """Pure Python fallback for similarity search."""
+        import json
+        import math
         all_embeddings = self.search([])
         scored_products = []
         def dot_product(v1, v2): return sum(x * y for x, y in zip(v1, v2))
