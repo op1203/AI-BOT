@@ -85,23 +85,31 @@ class DiscussChannel(models.Model):
                     def get_revenue_breakdown(start, end):
                         s_total, s_count = 0.0, 0
                         p_total, p_count = 0.0, 0
+                        
+                        start_str = fields.Datetime.to_string(start)
+                        end_str = fields.Datetime.to_string(end)
+
                         if 'sale.order' in self.env:
-                            s_orders = self.env['sale.order'].search([
-                                ('state', 'in', ['sale', 'done']),
-                                ('date_order', '>=', fields.Datetime.to_string(start)),
-                                ('date_order', '<=', fields.Datetime.to_string(end))
-                            ])
-                            s_total = sum(s_orders.mapped('amount_total'))
-                            s_count = len(s_orders)
+                            self.env.cr.execute("""
+                                SELECT count(*), sum(amount_total) 
+                                FROM sale_order 
+                                WHERE state IN ('sale', 'done') 
+                                AND date_order >= %s AND date_order <= %s
+                            """, (start_str, end_str))
+                            res = self.env.cr.fetchone()
+                            s_count = res[0] or 0
+                            s_total = res[1] or 0.0
                         
                         if 'pos.order' in self.env:
-                            p_orders = self.env['pos.order'].search([
-                                ('state', 'in', ['paid', 'done', 'invoiced']),
-                                ('date_order', '>=', fields.Datetime.to_string(start)),
-                                ('date_order', '<=', fields.Datetime.to_string(end))
-                            ])
-                            p_total = sum(p_orders.mapped('amount_total'))
-                            p_count = len(p_orders)
+                            self.env.cr.execute("""
+                                SELECT count(*), sum(amount_total) 
+                                FROM pos_order 
+                                WHERE state IN ('paid', 'done', 'invoiced') 
+                                AND date_order >= %s AND date_order <= %s
+                            """, (start_str, end_str))
+                            res = self.env.cr.fetchone()
+                            p_count = res[0] or 0
+                            p_total = res[1] or 0.0
                         return s_total, s_count, p_total, p_count
 
                     s_rev_c, s_cnt_c, p_rev_c, p_cnt_c = get_revenue_breakdown(start_current, today)
@@ -141,8 +149,8 @@ class DiscussChannel(models.Model):
                             WHERE p.state IN ('paid', 'done', 'invoiced') AND p.date_order >= %s
                         ) as combined_sales
                         GROUP BY product_id
-                        ORDER BY total_qty DESC
-                        LIMIT 5
+                        ORDER BY total_revenue DESC
+                        LIMIT 10
                     """
                     self.env.cr.execute(query, (date_30_days_ago, date_30_days_ago))
                     
